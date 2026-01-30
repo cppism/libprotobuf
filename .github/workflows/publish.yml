@@ -1,0 +1,74 @@
+env:
+  PROTOBUF_VERSION: "33.5"
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+      fail-fast: false
+    steps:
+      - run: echo "ARTIFACT_NAME=${RUNNER_OS,,}-${RUNNER_ARCH,,}" >> $GITHUB_ENV
+      - run: echo "ARTIFACT_PATH=$HOME/${ARTIFACT_NAME}.tar" >> $GITHUB_ENV
+      - run: |
+          sudo apt update
+          sudo apt install -y libgtest-dev libgmock-dev
+      - run: >
+          gh release download
+          --repo protocolbuffers/protobuf v$PROTOBUF_VERSION
+          --archive=tar.gz
+          --output -
+          | tar -xzf -
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: mv protobuf-$PROTOBUF_VERSION protobuf
+      - run: >
+          cmake
+          -G Ninja
+          -S protobuf
+          -B protobuf/build
+          -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build protobuf/build --verbose
+      - run: cmake --install protobuf/build
+        env:
+          DESTDIR: staging
+      - run: >
+          tar --create --absolute-names
+          --group=0 --owner=0
+          --file=${ARTIFACT_PATH}
+          .
+        working-directory: staging
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+  release:
+    if: github.ref_name == 'master'
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
+      - run: >
+          gh release create
+          $PROTOBUF_VERSION
+          --latest=false
+          --title=$PROTOBUF_VERSION
+          *.tar
+        env:
+          GH_TOKEN: ${{ github.token }}
